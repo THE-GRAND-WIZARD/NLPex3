@@ -1,4 +1,4 @@
 import math
 
 
-print("Hubbagolnog")
+print("Hubbagolnoga")
