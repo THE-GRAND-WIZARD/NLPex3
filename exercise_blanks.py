@@ -314,6 +314,10 @@ def binary_accuracy(preds, y):
     :param y: a vector of true labels
     :return: scalar value - (<number of accurate predictions> / <number of examples>)
     """
+    all_preds = len(preds)
+    preds_list = preds.tolist() # conversion to list for faster iteration
+    for i in range(len(preds_list)):
+        preds_list[i] = round(preds_list[i]) # round to either 0 or 1
 
     return
 
@@ -352,6 +356,8 @@ def get_predictions_for_data(model, data_iter):
     :param data_iter: torch iterator as given by the DataManager
     :return:
     """
+    # todo: choice between numpy or torch has to be synchronized with binary_accuracy
+    # for now np array chosen
     return
 
 
