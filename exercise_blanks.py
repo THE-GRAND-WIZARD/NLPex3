@@ -315,11 +315,9 @@ def binary_accuracy(preds, y):
     :return: scalar value - (<number of accurate predictions> / <number of examples>)
     """
     all_preds = len(preds)
-    preds_list = preds.tolist() # conversion to list for faster iteration
-    for i in range(len(preds_list)):
-        preds_list[i] = round(preds_list[i]) # round to either 0 or 1
-
-    return
+    rounded_preds = np.round(preds) # round to either 0 or 1
+    accurate_preds = np.count_nonzero(rounded_preds==y) # check how many correct predictions
+    return accurate_preds/all_preds
 
 
 def train_epoch(model, data_iterator, optimizer, criterion):
