@@ -294,10 +294,11 @@ class LogLinear(nn.Module):
     general class for the log-linear models for sentiment analysis.
     """
     def __init__(self, embedding_dim):
-        return
+        super(LogLinear, self).__init__()
+        self.layer = nn.Linear(embedding_dim, 1, dtype=torch.float64)
 
     def forward(self, x):
-        return
+        return self.layer(x)
 
     def predict(self, x):
         return
@@ -329,8 +330,25 @@ def train_epoch(model, data_iterator, optimizer, criterion):
     :param optimizer: the optimizer object for the training process.
     :param criterion: the criterion object for the training process.
     """
-
-    return
+    model.train()
+    total_loss = 0
+    correct_predictions = 0
+    total_examples = 0
+    for inputs, targets in data_iterator:
+        optimizer.zero_grad()
+        partial_outputs = model(inputs)
+        complementary_outputs = 1 - partial_outputs[:, 0].unsqueeze(1)
+        outputs = torch.cat((partial_outputs[:, 0].unsqueeze(1), complementary_outputs), dim=1)
+        loss = criterion(outputs, targets.to(torch.int64))
+        loss.backward()
+        optimizer.step()
+        _, predicted = torch.max(outputs, 1)
+        correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
+        total_examples += targets.size(0)
+        total_loss += loss.item() * inputs.size(0)
+    average_loss = total_loss / total_examples
+    accuracy = correct_predictions / total_examples
+    return accuracy, average_loss
 
 
 def evaluate(model, data_iterator, criterion):
@@ -341,12 +359,25 @@ def evaluate(model, data_iterator, criterion):
     :param criterion: the loss criterion used for evaluation
     :return: tuple of (average loss over all examples, average accuracy over all examples)
     """
-    return
+    model.eval()
+    total_loss = 0
+    correct_predictions = 0
+    total_examples = 0
+    with torch.no_grad():
+        for inputs, targets in data_iterator:
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            _, predicted = torch.max(outputs, 1)
+            correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
+            total_examples += targets.size(0)
+            total_loss += loss.item() * inputs.size(0)
+    average_loss = total_loss / total_examples
+    accuracy = correct_predictions / total_examples
+    return accuracy, average_loss
 
 
 def get_predictions_for_data(model, data_iter):
     """
-
     This function should iterate over all batches of examples from data_iter and return all of the models
     predictions as a numpy ndarray or torch tensor (or list if you prefer). the prediction should be in the
     same order of the examples returned by data_iter.
@@ -369,14 +400,37 @@ def train_model(model, data_manager, n_epochs, lr, weight_decay=0.):
     :param lr: learning rate to be used for optimization
     :param weight_decay: parameter for l2 regularization
     """
-    return
+    device = get_available_device()
+    model = model.to(device)
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    criterion = nn.CrossEntropyLoss().to(device)
+    training_data_iterator = data_manager.get_torch_iterator(TRAIN)
+    valuation_data_iterator = data_manager.get_torch_iterator(VAL)#.to(device)
+    train_losses = []
+    train_accuracies = []
+    valuated_losses = []
+    valuated_accuracies = []
+    for i in range(n_epochs):
+        print("Starting training epoch ", i, "...")
+        train_loss, train_accuracy = train_epoch(model, training_data_iterator, optimiser, criterion)
+        train_losses += [train_loss]
+        train_accuracies += [train_accuracy]
+        valuated_loss, valuated_accuracy = evaluate(model, valuation_data_iterator, criterion)
+        valuated_losses += [valuated_loss]
+        valuated_accuracies += [valuated_accuracy]
+        save_model(model, "log_linear_model.pickle", i, optimiser)
+        print("Finished training epoch ", i, "; training loss: ", train_loss, ", training accuracy: ", train_accuracy,
+              "; valuation loss: ", valuated_loss, ", valuation accuracy: ", valuated_accuracy, "!")
+    return train_losses, train_accuracies, valuated_losses, valuated_accuracies
 
 
-def train_log_linear_with_one_hot():
+def train_log_linear_with_one_hot(tree_bank_manager, epoch_count, learning_rate, weight_decay):
     """
     Here comes your code for training and evaluation of the log linear model with one hot representation.
     """
-    return
+    log_linear_model = LogLinear(len(tree_bank_manager.word_list))
+    train_losses, train_accuracies, valuated_losses, valuated_accuracies = train_model(log_linear_model, tree_bank_manager.data_manager, epoch_count, learning_rate, weight_decay)
+    return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies
 
 
 def train_log_linear_with_w2v():
@@ -405,11 +459,14 @@ class TreeBankManager:
         self.test_set = self.tree_bank.get_test_set()
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
+        self.data_manager = DataManager()
+        # self.training_data_iterator = self.data_manager.get_torch_iterator(TRAIN)
+        # self.validation_data_iterator = self.data_manager.get_torch_iterator(VAL)
+        # self.test_data_iterator = self.data_manager.get_torch_iterator(TEST)
 
 
 if __name__ == '__main__':
-    train_log_linear_with_one_hot()
-    tree_bank_manager = TreeBankManager()
-    print(average_one_hots(tree_bank_manager.training_set[0], get_word_to_ind(tree_bank_manager.word_list)))
+    tree_bank_managerr = TreeBankManager()
+    train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)
     # train_log_linear_with_w2v()
     # train_lstm_with_w2v()
