@@ -125,7 +125,7 @@ def get_one_hot(size, ind):
     :param ind: the entry index to turn to 1
     :return: numpy ndarray which represents the one-hot vector
     """
-    return
+    return np.array([0] * ind + [1] + [0] * (size - ind - 1))
 
 
 def average_one_hots(sent, word_to_ind):
@@ -136,7 +136,11 @@ def average_one_hots(sent, word_to_ind):
     :param word_to_ind: a mapping between words to indices
     :return:
     """
-    return
+    vocab_size = len(list(word_to_ind.keys()))
+    one_hots = np.empty((0, vocab_size))
+    for leaf in sent.get_leaves():
+        one_hots = np.vstack([one_hots, get_one_hot(vocab_size, word_to_ind[leaf.text[0]])])
+    return np.sum(one_hots, 0) / len(one_hots)
 
 
 def get_word_to_ind(words_list):
@@ -146,7 +150,10 @@ def get_word_to_ind(words_list):
     :param words_list: a list of words
     :return: the dictionary mapping words to the index
     """
-    return
+    result = {}
+    for i in range(len(words_list)):
+        result[words_list[i]] = i
+    return result
 
 
 def sentence_to_embedding(sent, word_to_vec, seq_len, embedding_dim=300):
@@ -383,7 +390,22 @@ def train_lstm_with_w2v():
     return
 
 
+##############################OUR_STUFF#################################
+
+
+class TreeBankManager:
+    def __init__(self):
+        self.tree_bank = data_loader.SentimentTreeBank()
+        self.training_set = self.tree_bank.get_train_set()
+        self.validation_set = self.tree_bank.get_validation_set()
+        self.test_set = self.tree_bank.get_test_set()
+        self.word_count = self.tree_bank.get_word_counts()
+        self.word_list = list(self.word_count.keys())
+
+
 if __name__ == '__main__':
     train_log_linear_with_one_hot()
+    tree_bank_manager = TreeBankManager()
+    print(average_one_hots(tree_bank_manager.training_set[0], get_word_to_ind(tree_bank_manager.word_list)))
     # train_log_linear_with_w2v()
     # train_lstm_with_w2v()
