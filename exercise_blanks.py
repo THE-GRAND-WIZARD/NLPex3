@@ -1,5 +1,5 @@
 import datetime
-
+import multiprocessing
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -130,7 +130,14 @@ def get_one_hot(size, ind):
     return np.array([0] * ind + [1] + [0] * (size - ind - 1))
 
 
-def average_one_hots(sent, word_to_ind):
+def get_one_hots(size):
+    result = []
+    for i in range(size):
+        result.append(get_one_hot(size, i))
+    return result
+
+
+def average_one_hots(sent, word_to_ind, one_hots):
     """
     this method gets a sentence, and a mapping between words to indices, and returns the average
     one-hot embedding of the tokens in the sentence.
@@ -138,10 +145,9 @@ def average_one_hots(sent, word_to_ind):
     :param word_to_ind: a mapping between words to indices
     :return:
     """
-    vocab_size = len(word_to_ind)
     one_hots_list = []
     for leaf in sent.get_leaves():  # for each word in the sentence, add to a growing list the one-hot vector for it
-        one_hots_list.append(get_one_hot(vocab_size, word_to_ind[leaf.text[0]]))
+        one_hots_list.append(one_hots[word_to_ind[leaf.text[0]]])
     one_hots = np.vstack(one_hots_list)  # stack the one_hot vectors
     return np.sum(one_hots, 0) / len(one_hots)  # get the average of the one_hot vectors
 
@@ -177,36 +183,53 @@ class OnlineDataset(Dataset):
     A pytorch dataset which generates model inputs on the fly from sentences of SentimentTreeBank
     """
 
-    def __init__(self, sent_data, sent_func, sent_func_kwargs):
+    def __init__(self, sent_data, sent_func, sent_func_kwargs, data_role, data_type):
         """
         :param sent_data: list of sentences from SentimentTreeBank
         :param sent_func: Function which converts a sentence to an input datapoint
         :param sent_func_kwargs: fixed keyword arguments for the state_func
         """
-        self.data = sent_data[:len(sent_data) // 100]
+        self.data = sent_data#[:len(sent_data) // 100]
         self.sent_func = sent_func
-        self.sent_func_kwargs = sent_func_kwargs
+        self.sent_func_kwargs = sent_func_kwargs  # Oh, behave?
+        self.data_role = data_role
+        self.data_type = data_type
         self.sentence_embeddings, self.sentence_labels = self._get_sentence_labeled_embeddings()
         # self.sentence_embeddings = torch.tensor([self.sent_func(sent, **self.sent_func_kwargs) for sent in sent_data]).to(get_available_device())
         # self.sentence_labels = torch.tensor([sent.sentiment_class for sent in sent_data]).to(get_available_device())
 
     def _get_sentence_labeled_embeddings(self):
-        embeddings = []
-        labels = []
-        for sent in self.data:
-            embeddings.append(self.sent_func(sent, **self.sent_func_kwargs))
-            labels.append(sent.sentiment_class)
-            if (len(labels) % 100) == 0:
-                print("Found ", len(labels), "labels!")
-        return torch.tensor(embeddings).to(get_available_device()), torch.tensor(labels).to(get_available_device())
+        if os.path.exists(self.data_type + "_" + self.data_role + "_huge_tensor.pt") and os.path.exists(self.data_type + "_" + self.data_role + "_tiny_tensor.pt"):
+            embeddings = torch.load(self.data_type + "_" + self.data_role + "_huge_tensor.pt")
+            labels = torch.load(self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
+        else:
+            embedding_blocks = []
+            label_blocks = []
+            embedding_block = []
+            label_block = []
+            for sent in self.data:
+                embedding_block.append(self.sent_func(sent, **self.sent_func_kwargs))
+                label_block.append(sent.sentiment_class)
+                if (len(label_block) % 100) == 0:
+                    embedding_blocks.append(embedding_block)
+                    label_blocks.append(label_block)
+                    embedding_block = []
+                    label_block = []
+                    print("Processed ", len(label_blocks), " sentence blocks!")
+            embeddings_raw = torch.tensor(embedding_blocks)
+            embeddings = torch.cat((embeddings_raw.view(-1, len(embedding_blocks[0][0])), torch.tensor(embedding_block)), dim=0)
+            labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)
+            torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")
+            torch.save(labels, self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
+        return embeddings.to(get_available_device()), labels.to(get_available_device())
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        sent = self.data[idx]
-        sent_emb = self.sent_func(sent, **self.sent_func_kwargs)
-        sent_label = sent.sentiment_class
+        # sent = self.data[idx]
+        # sent_emb = self.sent_func(sent, **self.sent_func_kwargs)
+        # sent_label = sent.sentiment_class
         return self.sentence_embeddings[idx], self.sentence_labels[idx]
 
 
@@ -243,7 +266,8 @@ class DataManager():
         words_list = list(self.sentiment_dataset.get_word_counts().keys())
         if data_type == ONEHOT_AVERAGE:
             self.sent_func = average_one_hots
-            self.sent_func_kwargs = {"word_to_ind": get_word_to_ind(words_list)}
+            self.sent_func_kwargs = {"word_to_ind": get_word_to_ind(words_list),
+                                     "one_hots": get_one_hots(len(words_list))}
         elif data_type == W2V_SEQUENCE:
             self.sent_func = sentence_to_embedding
 
@@ -260,7 +284,7 @@ class DataManager():
         else:
             raise ValueError("invalid data_type: {}".format(data_type))
         # map data splits to torch datasets and iterators
-        self.torch_datasets = {k: OnlineDataset(sentences, self.sent_func, self.sent_func_kwargs) for
+        self.torch_datasets = {k: OnlineDataset(sentences, self.sent_func, self.sent_func_kwargs, k, data_type) for
                                k, sentences in self.sentences.items()}
         self.torch_iterators = {k: DataLoader(dataset, batch_size=batch_size, shuffle=k == TRAIN)
                                 for k, dataset in self.torch_datasets.items()}
