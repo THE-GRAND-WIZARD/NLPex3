@@ -189,39 +189,41 @@ class OnlineDataset(Dataset):
         :param sent_func: Function which converts a sentence to an input datapoint
         :param sent_func_kwargs: fixed keyword arguments for the state_func
         """
-        self.data = sent_data#[:len(sent_data) // 100]
+        self.data = sent_data
         self.sent_func = sent_func
-        self.sent_func_kwargs = sent_func_kwargs  # Oh, behave?
+        self.sent_func_kwargs = sent_func_kwargs
         self.data_role = data_role
         self.data_type = data_type
-        self.sentence_embeddings, self.sentence_labels = self._get_sentence_labeled_embeddings()
-        # self.sentence_embeddings = torch.tensor([self.sent_func(sent, **self.sent_func_kwargs) for sent in sent_data]).to(get_available_device())
-        # self.sentence_labels = torch.tensor([sent.sentiment_class for sent in sent_data]).to(get_available_device())
+        self.sentence_embeddings, self.sentence_labels = self._get_sentence_labeled_embeddings()  # instead of keeping
+        # the sentences as data, We store All the labels in the GPU memory to make things more efficient
 
-    def _get_sentence_labeled_embeddings(self):
-        if os.path.exists(self.data_type + "_" + self.data_role + "_huge_tensor.pt") and os.path.exists(self.data_type + "_" + self.data_role + "_tiny_tensor.pt"):
+    def _get_sentence_labeled_embeddings(self):  # returns the embeddings and labels for the data
+        if os.path.exists(self.data_type + "_" + self.data_role + "_huge_tensor.pt") and \
+         os.path.exists(self.data_type + "_" + self.data_role + "_tiny_tensor.pt"):  # We check for existence of the
+            # saved data, and if it exists We load it
             embeddings = torch.load(self.data_type + "_" + self.data_role + "_huge_tensor.pt")
             labels = torch.load(self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
-        else:
-            embedding_blocks = []
+        else:  # Otherwise, We do the conversion process
+            embedding_blocks = []  # Initialize the block lists
             label_blocks = []
-            embedding_block = []
+            embedding_block = []  # Initialize the blocks
             label_block = []
-            for sent in self.data:
+            for sent in self.data:  # For each sentence, We apply the embedding function
                 embedding_block.append(self.sent_func(sent, **self.sent_func_kwargs))
                 label_block.append(sent.sentiment_class)
-                if (len(label_block) % 100) == 0:
+                if (len(label_block) % 100) == 0:  # Every 100 sentences, to prevent a huge list from forming,
+                    # We add the 100 sentence block to the block list
                     embedding_blocks.append(embedding_block)
                     label_blocks.append(label_block)
                     embedding_block = []
                     label_block = []
                     print("Processed ", len(label_blocks), " sentence blocks!")
-            embeddings_raw = torch.tensor(embedding_blocks)
-            embeddings = torch.cat((embeddings_raw.view(-1, len(embedding_blocks[0][0])), torch.tensor(embedding_block)), dim=0)
-            labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)
-            torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")
+            embeddings_raw = torch.tensor(embedding_blocks)  # convert embeddings to tensor
+            embeddings = torch.cat((embeddings_raw.view(-1, len(embedding_blocks[0][0])), torch.tensor(embedding_block)), dim=0)  # Add the remaining non-full block to the tensor
+            labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)  # Labels tensor
+            torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")  # Save Our results for future use
             torch.save(labels, self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
-        return embeddings.to(get_available_device()), labels.to(get_available_device())
+        return embeddings.to(get_available_device()), labels.to(get_available_device())  # Convert to device and return
 
     def __len__(self):
         return len(self.data)
@@ -230,7 +232,7 @@ class OnlineDataset(Dataset):
         # sent = self.data[idx]
         # sent_emb = self.sent_func(sent, **self.sent_func_kwargs)
         # sent_label = sent.sentiment_class
-        return self.sentence_embeddings[idx], self.sentence_labels[idx]
+        return self.sentence_embeddings[idx], self.sentence_labels[idx]  # We changed this function to return the appropriate data
 
 
 class DataManager():
@@ -371,22 +373,16 @@ def train_epoch(model, data_iterator, optimizer, criterion):
     :param optimizer: the optimizer object for the training process.
     :param criterion: the criterion object for the training process.
     """
-    model.train()
-    for inputs, targets in data_iterator:
-        # inputs = inputs.to(device)
-        # targets = targets.to(device)
-        optimizer.zero_grad()
-        partial_outputs = model(inputs)
-        complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)
-        outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)
-        loss = criterion(outputs, targets.to(torch.int64))
-        loss.backward()
-        optimizer.step()
-        #_, predicted = torch.max(outputs, 1)
-        #correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
-        #total_examples += targets.size(0)
-        #total_loss += loss.item() * inputs.size(0)
-    return evaluate(model, data_iterator, criterion)
+    model.train()  # Set model to train mode
+    for inputs, targets in data_iterator:  # Iterate over the data
+        optimizer.zero_grad()  # Zero the gradient
+        partial_outputs = model(inputs)  # Get the values the model returns for the data (representing a prediction of positive sentiment)
+        complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)  # Get the complement output for negative sentiments
+        outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)  # Connect the two
+        loss = criterion(outputs, targets.to(torch.int64))  # Calculate loss
+        loss.backward()  # Calculate gradient of loss
+        optimizer.step()  # Move the parameters of the model according to the gradient
+    return evaluate(model, data_iterator, criterion)  # We evaluate What We've trained and return the accuracy and loss
 
 
 def evaluate(model, data_iterator, criterion):
@@ -397,25 +393,23 @@ def evaluate(model, data_iterator, criterion):
     :param criterion: the loss criterion used for evaluation
     :return: tuple of (average loss over all examples, average accuracy over all examples)
     """
-    model.eval()
-    total_loss = 0
+    model.eval()  # Similarly, set model to evaluation mode
+    total_loss = 0  # Initialize values
     correct_predictions = 0
     total_examples = 0
-    with torch.no_grad():
-        for inputs, targets in data_iterator:
-            # inputs = inputs.to(device)
-            # targets = targets.to(device)
-            partial_outputs = model(inputs)
-            complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)
-            outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)
-            loss = criterion(outputs, targets.to(torch.int64))
-            _, predicted = torch.max(outputs, 1)
-            correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
-            total_examples += targets.size(0)
-            total_loss += loss.item() * inputs.size(0)
-    average_loss = total_loss / total_examples
-    accuracy = correct_predictions / total_examples
-    return accuracy, average_loss
+    with torch.no_grad():  # No gradient for ease of calculation
+        for inputs, targets in data_iterator:  # Iterate over the data
+            partial_outputs = model(inputs)  # Get the positive prediction
+            complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)  # Complementary negative prediction
+            outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)  # Combine
+            loss = criterion(outputs, targets.to(torch.int64))  # Calculate loss
+            _, predicted = torch.max(outputs, 1)  # Count positive predictions
+            correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()  # Count correct predictions
+            total_examples += targets.size(0)  # Count total data elements seen in this iteration
+            total_loss += loss.item() * inputs.size(0)  # Calculate cumulative loss
+    average_loss = total_loss / total_examples  # Calculate average loss
+    accuracy = correct_predictions / total_examples  # Calculate accuracy
+    return accuracy, average_loss  # Return values
 
 
 def get_predictions_for_data(model, data_iter):
@@ -442,34 +436,32 @@ def train_model(model, data_manager, n_epochs, lr, weight_decay=0.):
     :param lr: learning rate to be used for optimization
     :param weight_decay: parameter for l2 regularization
     """
-
-    device = get_available_device()
-    model = model.to(device)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    criterion = nn.CrossEntropyLoss().to(device)
-    training_data_iterator = data_manager.get_torch_iterator(TRAIN)
-    validation_data_iterator = data_manager.get_torch_iterator(VAL)
-    training_losses = []
+    device = get_available_device()  # Get available device
+    model = model.to(device)  # Convert model to device
+    optimiser = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)  # Initialize ADAM algorithm
+    criterion = nn.CrossEntropyLoss().to(device)  # Initialize Cross Entropy Loss and convert to device
+    training_data_iterator = data_manager.get_torch_iterator(TRAIN)  # Get training data iterator
+    validation_data_iterator = data_manager.get_torch_iterator(VAL)  # Get validation data iterator
+    training_losses = []  # Initialize losses and accuracies for training and validation
     training_accuracies = []
     validated_losses = []
     validated_accuracies = []
-    initial_training_loss, initial_training_accuracy = evaluate(model, training_data_iterator, criterion)
+    initial_training_loss, initial_training_accuracy = evaluate(model, training_data_iterator, criterion)  # Calculate initial losses and accuracies and display
     initial_validated_loss, initial_validated_accuracy = evaluate(model, validation_data_iterator, criterion)
     print("Starting training, initial training loss: ", initial_training_loss, ", training accuracy: ", initial_training_accuracy,
               ", validation loss: ", initial_validated_loss, ", validation accuracy: ", initial_validated_accuracy, "!")
-    for i in range(n_epochs):
+    for i in range(n_epochs):  # Perform each training epoch
         print("Starting training epoch ", i, "...")
-        training_loss, training_accuracy = train_epoch(model, training_data_iterator, optimiser, criterion)
-        training_losses += [training_loss]
+        training_loss, training_accuracy = train_epoch(model, training_data_iterator, optimiser, criterion)  # Train the model
+        training_losses += [training_loss]  # Add accuracy and loss to list
         training_accuracies += [training_accuracy]
-        validated_loss, validated_accuracy = evaluate(model, validation_data_iterator, criterion)
-        validated_losses += [validated_loss]
+        validated_loss, validated_accuracy = evaluate(model, validation_data_iterator, criterion)  # Validate the model
+        validated_losses += [validated_loss]  # Add accuracy and loss to list
         validated_accuracies += [validated_accuracy]
-        # save_model(model, "log_linear_model" + str(i) + "," + str(datetime.datetime) + ".pickle", i, optimiser)
-        print("Finished training epoch ", i,
+        print("Finished training epoch ", i,  # Print training epoch results
               "; training loss: ", training_loss, ", training accuracy: ", training_accuracy,
               ", validation loss: ", validated_loss, ", validation accuracy: ", validated_accuracy, "!")
-    return training_losses, training_accuracies, validated_losses, validated_accuracies
+    return training_losses, training_accuracies, validated_losses, validated_accuracies  # Return losses and accuracies for training and validation
 
 
 def train_log_linear_with_one_hot(tree_bank_manager, epoch_count, learning_rate, weight_decay):
@@ -480,7 +472,7 @@ def train_log_linear_with_one_hot(tree_bank_manager, epoch_count, learning_rate,
     train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
         train_model(log_linear_model, tree_bank_manager.data_manager, epoch_count, learning_rate, weight_decay)
     # train the model, return the model along with losses and accuracies
-    return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies
+    return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
 
 def train_log_linear_with_w2v():
@@ -502,7 +494,7 @@ def train_lstm_with_w2v():
 
 
 class TreeBankManager:
-    def __init__(self, batch_size):
+    def __init__(self, batch_size):  # Initializes the basic structures We'll need
         self.tree_bank = data_loader.SentimentTreeBank()
         self.training_set = self.tree_bank.get_train_set()
         self.validation_set = self.tree_bank.get_validation_set()
@@ -510,13 +502,10 @@ class TreeBankManager:
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
         self.data_manager = DataManager(batch_size=batch_size)
-        # self.training_data_iterator = self.data_manager.get_torch_iterator(TRAIN)
-        # self.validation_data_iterator = self.data_manager.get_torch_iterator(VAL)
-        # self.test_data_iterator = self.data_manager.get_torch_iterator(TEST)
 
 
 if __name__ == '__main__':
-    tree_bank_managerr = TreeBankManager(64)
-    train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)
+    tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
+    train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
     # train_log_linear_with_w2v()
     # train_lstm_with_w2v()
