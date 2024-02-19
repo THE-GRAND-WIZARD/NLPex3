@@ -362,7 +362,7 @@ def binary_accuracy(preds, y):
     return accurate_preds/all_preds
 
 
-def train_epoch(model, data_iterator, optimizer, criterion, device):
+def train_epoch(model, data_iterator, optimizer, criterion):
     """
     This method operates one epoch (pass over the whole train set) of training of the given model,
     and returns the accuracy and loss for this epoch
@@ -372,29 +372,24 @@ def train_epoch(model, data_iterator, optimizer, criterion, device):
     :param criterion: the criterion object for the training process.
     """
     model.train()
-    total_loss = 0
-    correct_predictions = 0
-    total_examples = 0
     for inputs, targets in data_iterator:
         # inputs = inputs.to(device)
         # targets = targets.to(device)
         optimizer.zero_grad()
         partial_outputs = model(inputs)
-        complementary_outputs = 1 - partial_outputs[:, 0].unsqueeze(1)
-        outputs = torch.cat((partial_outputs[:, 0].unsqueeze(1), complementary_outputs), dim=1)
+        complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)
+        outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)
         loss = criterion(outputs, targets.to(torch.int64))
         loss.backward()
         optimizer.step()
-        _, predicted = torch.max(outputs, 1)
-        correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
-        total_examples += targets.size(0)
-        total_loss += loss.item() * inputs.size(0)
-    average_loss = total_loss / total_examples
-    accuracy = correct_predictions / total_examples
-    return accuracy, average_loss
+        #_, predicted = torch.max(outputs, 1)
+        #correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
+        #total_examples += targets.size(0)
+        #total_loss += loss.item() * inputs.size(0)
+    return evaluate(model, data_iterator, criterion)
 
 
-def evaluate(model, data_iterator, criterion, device):
+def evaluate(model, data_iterator, criterion):
     """
     evaluate the model performance on the given data
     :param model: one of our models..
@@ -411,8 +406,8 @@ def evaluate(model, data_iterator, criterion, device):
             # inputs = inputs.to(device)
             # targets = targets.to(device)
             partial_outputs = model(inputs)
-            complementary_outputs = 1 - partial_outputs[:, 0].unsqueeze(1)
-            outputs = torch.cat((partial_outputs[:, 0].unsqueeze(1), complementary_outputs), dim=1)
+            complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)
+            outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)
             loss = criterion(outputs, targets.to(torch.int64))
             _, predicted = torch.max(outputs, 1)
             correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()
@@ -458,18 +453,22 @@ def train_model(model, data_manager, n_epochs, lr, weight_decay=0.):
     training_accuracies = []
     validated_losses = []
     validated_accuracies = []
+    initial_training_loss, initial_training_accuracy = evaluate(model, training_data_iterator, criterion)
+    initial_validated_loss, initial_validated_accuracy = evaluate(model, validation_data_iterator, criterion)
+    print("Starting training, initial training loss: ", initial_training_loss, ", training accuracy: ", initial_training_accuracy,
+              ", validation loss: ", initial_validated_loss, ", validation accuracy: ", initial_validated_accuracy, "!")
     for i in range(n_epochs):
         print("Starting training epoch ", i, "...")
-        training_loss, training_accuracy = train_epoch(model, training_data_iterator, optimiser, criterion, device)
+        training_loss, training_accuracy = train_epoch(model, training_data_iterator, optimiser, criterion)
         training_losses += [training_loss]
         training_accuracies += [training_accuracy]
-        validated_loss, validated_accuracy = evaluate(model, validation_data_iterator, criterion, device)
+        validated_loss, validated_accuracy = evaluate(model, validation_data_iterator, criterion)
         validated_losses += [validated_loss]
         validated_accuracies += [validated_accuracy]
         # save_model(model, "log_linear_model" + str(i) + "," + str(datetime.datetime) + ".pickle", i, optimiser)
         print("Finished training epoch ", i,
               "; training loss: ", training_loss, ", training accuracy: ", training_accuracy,
-              ", valuation loss: ", validated_loss, ", valuation accuracy: ", validated_accuracy, "!")
+              ", validation loss: ", validated_loss, ", validation accuracy: ", validated_accuracy, "!")
     return training_losses, training_accuracies, validated_losses, validated_accuracies
 
 
