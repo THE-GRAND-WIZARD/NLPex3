@@ -117,7 +117,14 @@ def get_w2v_average(sent, word_to_vec, embedding_dim):
     :param embedding_dim: the dimension of the word embedding vectors
     :return The average embedding vector as numpy ndarray.
     """
-    return
+    w2v_list = []
+    for leaf in sent.get_leaves():  # for each word in the sentence, add to a growing list the one-hot vector for it
+        if leaf.text[0] in word_to_vec.keys():
+            w2v_list.append(word_to_vec[leaf.text[0]])
+    if len(w2v_list) > 0:
+        w2v = np.vstack(w2v_list)  # stack the one_hot vectors
+        return np.sum(w2v, 0) / len(w2v)  # get the average of the one_hot vectors
+    return np.zeros(embedding_dim)
 
 
 def get_one_hot(size, ind):
@@ -209,7 +216,10 @@ class OnlineDataset(Dataset):
             embedding_block = []  # Initialize the blocks
             label_block = []
             for sent in self.data:  # For each sentence, We apply the embedding function
-                embedding_block.append(self.sent_func(sent, **self.sent_func_kwargs))
+                new_embedding = self.sent_func(sent, **self.sent_func_kwargs)
+                if new_embedding.shape != (300,):
+                    new_embedding = np.zeros(300)
+                embedding_block.append(new_embedding)
                 label_block.append(sent.sentiment_class)
                 if (len(label_block) % 100) == 0:  # Every 100 sentences, to prevent a huge list from forming,
                     # We add the 100 sentence block to the block list
@@ -218,7 +228,8 @@ class OnlineDataset(Dataset):
                     embedding_block = []
                     label_block = []
                     print("Processed ", len(label_blocks), " sentence blocks!")
-            embeddings_raw = torch.tensor(embedding_blocks)  # convert embeddings to tensor
+            embedding_blocks_arr = np.array(embedding_blocks)
+            embeddings_raw = torch.tensor(embedding_blocks_arr)  # convert embeddings to tensor
             embeddings = torch.cat((embeddings_raw.view(-1, len(embedding_blocks[0][0])), torch.tensor(embedding_block)), dim=0)  # Add the remaining non-full block to the tensor
             labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)  # Labels tensor
             torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")  # Save Our results for future use
@@ -376,7 +387,7 @@ def train_epoch(model, data_iterator, optimizer, criterion):
     model.train()  # Set model to train mode
     for inputs, targets in data_iterator:  # Iterate over the data
         optimizer.zero_grad()  # Zero the gradient
-        partial_outputs = model(inputs)  # Get the values the model returns for the data (representing a prediction of positive sentiment)
+        partial_outputs = model(inputs.to(torch.float64))  # Get the values the model returns for the data (representing a prediction of positive sentiment)
         complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)  # Get the complement output for negative sentiments
         outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)  # Connect the two
         loss = criterion(outputs, targets.to(torch.int64))  # Calculate loss
@@ -399,7 +410,7 @@ def evaluate(model, data_iterator, criterion):
     total_examples = 0
     with torch.no_grad():  # No gradient for ease of calculation
         for inputs, targets in data_iterator:  # Iterate over the data
-            partial_outputs = model(inputs)  # Get the positive prediction
+            partial_outputs = model(inputs.to(torch.float64))  # Get the positive prediction
             complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)  # Complementary negative prediction
             outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)  # Combine
             loss = criterion(outputs, targets.to(torch.int64))  # Calculate loss
@@ -470,17 +481,21 @@ def train_log_linear_with_one_hot(tree_bank_manager, epoch_count, learning_rate,
     """
     log_linear_model = LogLinear(len(tree_bank_manager.word_list))  # initialize log-linear model
     train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
-        train_model(log_linear_model, tree_bank_manager.data_manager, epoch_count, learning_rate, weight_decay)
+        train_model(log_linear_model, tree_bank_manager.one_hot_average_data_manager, epoch_count, learning_rate, weight_decay)
     # train the model, return the model along with losses and accuracies
     return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
 
-def train_log_linear_with_w2v():
+def train_log_linear_with_w2v(tree_bank_manager, epoch_count, learning_rate, weight_decay):
     """
     Here comes your code for training and evaluation of the log linear model with word embeddings
     representation.
     """
-    return
+    log_linear_model = LogLinear(W2V_EMBEDDING_DIM)  # initialize log-linear model
+    train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
+        train_model(log_linear_model, tree_bank_manager.w2v_average_data_manager, epoch_count, learning_rate, weight_decay)
+    # train the model, return the model along with losses and accuracies
+    return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
 
 def train_lstm_with_w2v():
@@ -501,11 +516,13 @@ class TreeBankManager:
         self.test_set = self.tree_bank.get_test_set()
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
-        self.data_manager = DataManager(batch_size=batch_size)
+        self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
+        self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size)
 
 
 if __name__ == '__main__':
     tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
-    train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
+    # train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
+    train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
     # train_log_linear_with_w2v()
     # train_lstm_with_w2v()
