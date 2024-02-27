@@ -90,7 +90,7 @@ def load_word2vec():
     return wv_from_bin
 
 
-def create_or_load_slim_w2v(words_list, cache_w2v=False):
+def create_or_load_slim_w2v(words_list, cache_w2v=True):
     """
     returns word2vec dict only for words which appear in the dataset.
     :param words_list: list of words to use for the w2v dict
@@ -121,6 +121,8 @@ def get_w2v_average(sent, word_to_vec, embedding_dim):
     for leaf in sent.get_leaves():  # for each word in the sentence, add to a growing list the one-hot vector for it
         if leaf.text[0] in word_to_vec.keys():
             w2v_list.append(word_to_vec[leaf.text[0]])
+        else:
+            w2v_list.append(np.zeros(embedding_dim))
     if len(w2v_list) > 0:
         w2v = np.vstack(w2v_list)  # stack the one_hot vectors
         return np.sum(w2v, 0) / len(w2v)  # get the average of the one_hot vectors
@@ -182,7 +184,17 @@ def sentence_to_embedding(sent, word_to_vec, seq_len, embedding_dim=300):
     :param embedding_dim: the dimension of the w2v embedding
     :return: numpy ndarray of shape (seq_len, embedding_dim) with the representation of the sentence
     """
-    return
+    w2v_sequence = []
+    leaves = sent.get_leaves()
+    for i in range(seq_len):
+        if i < len(leaves):
+            if leaves[i].text[0] in word_to_vec.keys():
+                w2v_sequence.append(word_to_vec[leaves[i].text[0]])
+            else:
+                w2v_sequence.append(np.zeros(embedding_dim))
+        else:
+            w2v_sequence.append(np.zeros(embedding_dim))
+    return w2v_sequence
 
 
 class OnlineDataset(Dataset):
@@ -355,7 +367,11 @@ class LogLinear(nn.Module):
         return self.layer(x)  # return the non-activated result of the layer for one input
 
     def predict(self, x):
-        return
+        output = self.activation(self.layer(x))
+        result = torch.zeros_like(output)
+        result[output > 0.6] = 1
+        result[(output >= 0.4) & (output <= 0.6)] = -1
+        return result
 
 
 # ------------------------- training functions -------------
@@ -420,7 +436,7 @@ def evaluate(model, data_iterator, criterion):
             total_loss += loss.item() * inputs.size(0)  # Calculate cumulative loss
     average_loss = total_loss / total_examples  # Calculate average loss
     accuracy = correct_predictions / total_examples  # Calculate accuracy
-    return accuracy, average_loss  # Return values
+    return average_loss, accuracy  # Return values
 
 
 def get_predictions_for_data(model, data_iter):
@@ -432,9 +448,10 @@ def get_predictions_for_data(model, data_iter):
     :param data_iter: torch iterator as given by the DataManager
     :return:
     """
-    # todo: choice between numpy or torch has to be synchronized with binary_accuracy
-    # for now np array chosen
-    return
+    result = torch.empty((0,)).to(get_available_device())
+    for inputs, targets in data_iter:
+        result = torch.cat((result, model.predict(inputs.to(torch.float64))))
+    return result
 
 
 def train_model(model, data_manager, n_epochs, lr, weight_decay=0.):
@@ -523,6 +540,7 @@ class TreeBankManager:
 if __name__ == '__main__':
     tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
     # train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
-    train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
+    modell, _, _, _, _ = train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
+    print(get_predictions_for_data(modell, tree_bank_managerr.w2v_average_data_manager.get_torch_iterator(TEST)))
     # train_log_linear_with_w2v()
     # train_lstm_with_w2v()
