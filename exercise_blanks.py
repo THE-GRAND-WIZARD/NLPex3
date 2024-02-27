@@ -192,7 +192,10 @@ def sentence_to_embedding(sent, word_to_vec, seq_len, embedding_dim=300):
     for i in range(seq_len):
         if i < len(leaves):
             if leaves[i].text[0] in word_to_vec.keys():
-                w2v_sequence.append(word_to_vec[leaves[i].text[0]])
+                if word_to_vec[leaves[i].text[0]].shape == (0,):
+                    w2v_sequence.append(np.zeros(embedding_dim))
+                else:
+                    w2v_sequence.append(word_to_vec[leaves[i].text[0]])
             else:
                 w2v_sequence.append(np.zeros(embedding_dim))
         else:
@@ -245,7 +248,7 @@ class OnlineDataset(Dataset):
                     print("Processed ", len(label_blocks), " sentence blocks!")
             embedding_blocks_arr = np.array(embedding_blocks)
             embeddings_raw = torch.tensor(embedding_blocks_arr)  # convert embeddings to tensor
-            embeddings = torch.cat((embeddings_raw.view(-1, len(embedding_blocks[0][0])), torch.tensor(embedding_block)), dim=0)  # Add the remaining non-full block to the tensor
+            embeddings = torch.cat((embeddings_raw.view(-1, *embeddings_raw.shape[2:]), torch.tensor(embedding_block)), dim=0)  # Add the remaining non-full block to the tensor
             labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)  # Labels tensor
             torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")  # Save Our results for future use
             torch.save(labels, self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
@@ -348,12 +351,15 @@ class LSTM(nn.Module):
     An LSTM for sentiment analysis with architecture as described in the exercise description.
     """
     def __init__(self, embedding_dim, hidden_dim, n_layers, dropout):
-        self.lstm = nn.LSTM()
+        super(LSTM, self).__init__()
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, n_layers, batch_first=True, dropout=dropout, bidirectional=True)  # initialize one LSTM layer
+        self.linear = nn.Linear(2 * hidden_dim, 1, dtype=torch.float64)  # initialize one affine layer
+        self.activation = nn.Sigmoid()  # initialize sigmoid activation
 
-    def forward(self, text):
-        return
+    def forward(self, x):
+        return self.linear(self.lstm(x))
 
-    def predict(self, text):
+    def predict(self, x):
         return
 
 
@@ -453,8 +459,8 @@ def get_predictions_for_data(model, data_iter):
     """
     result = torch.empty((0,)).to(get_available_device())
     for inputs, targets in data_iter:
-        result = torch.cat((result, model.predict(inputs.to(torch.float64))))
-    return result
+        result = torch.cat((result, model.predict(inputs.to(torch.float64))), dim=0)
+    return result.view(-1)
 
 
 def train_model(model, data_manager, n_epochs, lr, weight_decay=0.):
@@ -518,11 +524,16 @@ def train_log_linear_with_w2v(tree_bank_manager, epoch_count, learning_rate, wei
     return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
 
-def train_lstm_with_w2v():
+def train_lstm_with_w2v(tree_bank_manager, epoch_count, learning_rate, weight_decay):
     """
     Here comes your code for training and evaluation of the LSTM model.
     """
-    return
+    lstm_model = LSTM(W2V_EMBEDDING_DIM, 100, 1, 0.5)
+    train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
+        train_model(lstm_model, tree_bank_manager.w2v_sequence_data_manager, epoch_count, learning_rate,
+                    weight_decay)
+    # train the model, return the model along with losses and accuracies
+    return lstm_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
 
 ##############################OUR_STUFF#################################
@@ -537,13 +548,13 @@ class TreeBankManager:
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
         self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
-        self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size)
+        self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size, embedding_dim=300)
+        self.w2v_sequence_data_manager = DataManager(data_type=W2V_SEQUENCE, batch_size=batch_size, embedding_dim=300)
 
 
 if __name__ == '__main__':
     tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
     # train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
-    modell, _, _, _, _ = train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
-    print(get_predictions_for_data(modell, tree_bank_managerr.w2v_average_data_manager.get_torch_iterator(TEST)))
-    # train_log_linear_with_w2v()
-    # train_lstm_with_w2v()
+    # modell, _, _, _, _ = train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
+    # print(get_predictions_for_data(modell, tree_bank_managerr.w2v_average_data_manager.get_torch_iterator(TEST)))
+    train_lstm_with_w2v(tree_bank_managerr, 4, 0.001, 0.0001)
