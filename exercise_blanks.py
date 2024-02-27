@@ -120,7 +120,10 @@ def get_w2v_average(sent, word_to_vec, embedding_dim):
     w2v_list = []
     for leaf in sent.get_leaves():  # for each word in the sentence, add to a growing list the one-hot vector for it
         if leaf.text[0] in word_to_vec.keys():
-            w2v_list.append(word_to_vec[leaf.text[0]])
+            if word_to_vec[leaf.text[0]].shape == (0,):
+                w2v_list.append(np.zeros(embedding_dim))
+            else:
+                w2v_list.append(word_to_vec[leaf.text[0]])
         else:
             w2v_list.append(np.zeros(embedding_dim))
     if len(w2v_list) > 0:
@@ -194,7 +197,7 @@ def sentence_to_embedding(sent, word_to_vec, seq_len, embedding_dim=300):
                 w2v_sequence.append(np.zeros(embedding_dim))
         else:
             w2v_sequence.append(np.zeros(embedding_dim))
-    return w2v_sequence
+    return np.array(w2v_sequence)
 
 
 class OnlineDataset(Dataset):
@@ -229,8 +232,8 @@ class OnlineDataset(Dataset):
             label_block = []
             for sent in self.data:  # For each sentence, We apply the embedding function
                 new_embedding = self.sent_func(sent, **self.sent_func_kwargs)
-                if new_embedding.shape != (300,):
-                    new_embedding = np.zeros(300)
+                # if new_embedding.shape != (300,):
+                #    new_embedding = np.zeros(300)
                 embedding_block.append(new_embedding)
                 label_block.append(sent.sentiment_class)
                 if (len(label_block) % 100) == 0:  # Every 100 sentences, to prevent a huge list from forming,
@@ -345,7 +348,7 @@ class LSTM(nn.Module):
     An LSTM for sentiment analysis with architecture as described in the exercise description.
     """
     def __init__(self, embedding_dim, hidden_dim, n_layers, dropout):
-        return
+        self.lstm = nn.LSTM()
 
     def forward(self, text):
         return
