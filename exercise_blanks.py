@@ -11,6 +11,7 @@ import operator
 import data_loader
 import pickle
 import tqdm
+import matplotlib.pyplot as plt
 
 # ------------------------------------------- Constants ----------------------------------------
 
@@ -208,7 +209,7 @@ class OnlineDataset(Dataset):
     A pytorch dataset which generates model inputs on the fly from sentences of SentimentTreeBank
     """
 
-    def __init__(self, sent_data, sent_func, sent_func_kwargs, data_role, data_type):
+    def __init__(self, sent_data, sent_func, sent_func_kwargs, data_role, data_type, special_subset=""):
         """
         :param sent_data: list of sentences from SentimentTreeBank
         :param sent_func: Function which converts a sentence to an input datapoint
@@ -219,15 +220,16 @@ class OnlineDataset(Dataset):
         self.sent_func_kwargs = sent_func_kwargs
         self.data_role = data_role
         self.data_type = data_type
+        self.special_subset = special_subset
         self.sentence_embeddings, self.sentence_labels = self._get_sentence_labeled_embeddings()  # instead of keeping
         # the sentences as data, We store All the labels in the GPU memory to make things more efficient
 
     def _get_sentence_labeled_embeddings(self):  # returns the embeddings and labels for the data
-        if os.path.exists(self.data_type + "_" + self.data_role + "_huge_tensor.pt") and \
-         os.path.exists(self.data_type + "_" + self.data_role + "_tiny_tensor.pt"):  # We check for existence of the
+        if os.path.exists(self.data_type + "_" + self.data_role + "_huge_tensor" + self.special_subset + ".pt") and \
+         os.path.exists(self.data_type + "_" + self.data_role + "_tiny_tensor" + self.special_subset + ".pt"):  # We check for existence of the
             # saved data, and if it exists We load it
-            embeddings = torch.load(self.data_type + "_" + self.data_role + "_huge_tensor.pt")
-            labels = torch.load(self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
+            embeddings = torch.load(self.data_type + "_" + self.data_role + "_huge_tensor" + self.special_subset + ".pt")
+            labels = torch.load(self.data_type + "_" + self.data_role + "_tiny_tensor" + self.special_subset + ".pt")
         else:  # Otherwise, We do the conversion process
             embedding_blocks = []  # Initialize the block lists
             label_blocks = []
@@ -250,8 +252,8 @@ class OnlineDataset(Dataset):
             embeddings_raw = torch.tensor(embedding_blocks_arr)  # convert embeddings to tensor
             embeddings = torch.cat((embeddings_raw.view(-1, *embeddings_raw.shape[2:]), torch.tensor(embedding_block)), dim=0)  # Add the remaining non-full block to the tensor
             labels = torch.cat((torch.tensor(label_blocks).view(-1), torch.tensor(label_block)), dim=0)  # Labels tensor
-            torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor.pt")  # Save Our results for future use
-            torch.save(labels, self.data_type + "_" + self.data_role + "_tiny_tensor.pt")
+            torch.save(embeddings, self.data_type + "_" + self.data_role + "_huge_tensor" + self.special_subset + ".pt")  # Save Our results for future use
+            torch.save(labels, self.data_type + "_" + self.data_role + "_tiny_tensor" + self.special_subset + ".pt")
         return embeddings.to(get_available_device()), labels.to(get_available_device())  # Convert to device and return
 
     def __len__(self):
@@ -319,13 +321,28 @@ class DataManager():
                                k, sentences in self.sentences.items()}
         self.torch_iterators = {k: DataLoader(dataset, batch_size=batch_size, shuffle=k == TRAIN)
                                 for k, dataset in self.torch_datasets.items()}
+        self.negated_polarity_torch_dataset = OnlineDataset(self.get_negated_polarity_sentences(self.sentences[TEST]), self.sent_func, self.sent_func_kwargs, TEST, data_type, "_negated_polarity")
+        self.negated_polarity_torch_iterator = DataLoader(self.negated_polarity_torch_dataset, batch_size=batch_size, shuffle=False)
+        self.rare_words_torch_dataset = OnlineDataset(self.get_rare_words_sentences(self.sentences[TEST]), self.sent_func, self.sent_func_kwargs, TEST, data_type, "_rare_words")
+        self.rare_words_torch_iterator = DataLoader(self.rare_words_torch_dataset, batch_size=batch_size, shuffle=False)
 
-    def get_torch_iterator(self, data_subset=TRAIN):
+    def get_negated_polarity_sentences(self, sentences):
+        return [sentences[i] for i in data_loader.get_negated_polarity_examples(sentences)]
+
+    def get_rare_words_sentences(self, sentences):
+        return [sentences[i] for i in data_loader.get_rare_words_examples(sentences, self.sentiment_dataset)]
+
+    def get_torch_iterator(self, data_subset=TRAIN, special_subset_class=0):
         """
         :param data_subset: one of TRAIN VAL and TEST
         :return: torch batches iterator for this part of the datset
         """
-        return self.torch_iterators[data_subset]
+        if special_subset_class == 0:
+            return self.torch_iterators[data_subset]
+        elif special_subset_class == 1:
+            return self.negated_polarity_torch_iterator
+        elif special_subset_class == 2:
+            return self.rare_words_torch_iterator
 
     def get_labels(self, data_subset=TRAIN):
         """
@@ -512,7 +529,7 @@ def train_log_linear_with_one_hot(tree_bank_manager, epoch_count, learning_rate,
     """
     log_linear_model = LogLinear(len(tree_bank_manager.word_list))  # initialize log-linear model
     train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
-        train_model(log_linear_model, tree_bank_manager.one_hot_average_data_manager, epoch_count, learning_rate, weight_decay)
+        train_model(log_linear_model, tree_bank_manager.get_one_hot_average_manager(), epoch_count, learning_rate, weight_decay)
     # train the model, return the model along with losses and accuracies
     return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
@@ -524,7 +541,7 @@ def train_log_linear_with_w2v(tree_bank_manager, epoch_count, learning_rate, wei
     """
     log_linear_model = LogLinear(W2V_EMBEDDING_DIM)  # initialize log-linear model
     train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
-        train_model(log_linear_model, tree_bank_manager.w2v_average_data_manager, epoch_count, learning_rate, weight_decay)
+        train_model(log_linear_model, tree_bank_manager.get_w2v_average_manager(), epoch_count, learning_rate, weight_decay)
     # train the model, return the model along with losses and accuracies
     return log_linear_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
 
@@ -535,7 +552,7 @@ def train_lstm_with_w2v(tree_bank_manager, epoch_count, learning_rate, weight_de
     """
     lstm_model = LSTM(W2V_EMBEDDING_DIM, 100, 1, 0.5)
     train_losses, train_accuracies, valuated_losses, valuated_accuracies = \
-        train_model(lstm_model, tree_bank_manager.w2v_sequence_data_manager, epoch_count, learning_rate,
+        train_model(lstm_model, tree_bank_manager.get_w2v_sequence_manager(), epoch_count, learning_rate,
                     weight_decay)
     # train the model, return the model along with losses and accuracies
     return lstm_model, train_losses, train_accuracies, valuated_losses, valuated_accuracies  # return values and model
@@ -552,14 +569,137 @@ class TreeBankManager:
         self.test_set = self.tree_bank.get_test_set()
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
-        #self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
-        #self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size, embedding_dim=300)
-        self.w2v_sequence_data_manager = DataManager(data_type=W2V_SEQUENCE, batch_size=batch_size, embedding_dim=300)
+        # self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
+        # self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size, embedding_dim=300)
+        # self.w2v_sequence_data_manager = DataManager(data_type=W2V_SEQUENCE, batch_size=batch_size, embedding_dim=300)
+        self.one_hot_average_data_manager = None
+        self.w2v_average_data_manager = None
+        self.w2v_sequence_data_manager = None
+        self.loaded_one_hot_average = False
+        self.loaded_w2v_average = False
+        self.loaded_w2v_sequence = False
+        self.batch_size = batch_size
+
+    def _check_delete_one_hot(self):
+        if self.loaded_one_hot_average:
+            del self.one_hot_average_data_manager
+            self.loaded_one_hot_average = False
+
+    def _check_delete_w2v_average(self):
+        if self.loaded_w2v_average:
+            del self.w2v_average_data_manager
+            self.loaded_w2v_average = False
+
+    def _check_delete_w2v_sequence(self):
+        if self.loaded_w2v_sequence:
+            del self.w2v_sequence_data_manager
+            self.loaded_w2v_sequence = False
+
+    def _load_one_hot_manager(self):
+        if self.loaded_one_hot_average:
+            return self.one_hot_average_data_manager
+        else:
+            self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=self.batch_size)
+            self.loaded_one_hot_average = True
+            return self.one_hot_average_data_manager
+
+    def _load_w2v_average_manager(self):
+        if self.loaded_w2v_average:
+            return self.w2v_average_data_manager
+        else:
+            self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=self.batch_size, embedding_dim=W2V_EMBEDDING_DIM)
+            self.loaded_w2v_average = True
+            return self.w2v_average_data_manager
+
+    def _load_w2v_sequence_manager(self):
+        if self.loaded_w2v_sequence:
+            return self.w2v_sequence_data_manager
+        else:
+            self.w2v_sequence_data_manager = DataManager(data_type=W2V_SEQUENCE, batch_size=self.batch_size, embedding_dim=W2V_EMBEDDING_DIM)
+            self.loaded_w2v_sequence = True
+            return self.w2v_sequence_data_manager
+
+    def get_one_hot_average_manager(self):
+        self._check_delete_w2v_average()
+        self._check_delete_w2v_sequence()
+        return self._load_one_hot_manager()
+
+    def get_w2v_average_manager(self):
+        self._check_delete_one_hot()
+        self._check_delete_w2v_sequence()
+        return self._load_w2v_average_manager()
+
+    def get_w2v_sequence_manager(self):
+        self._check_delete_one_hot()
+        self._check_delete_w2v_average()
+        return self._load_w2v_sequence_manager()
+
+    def get_test_data_iterator(self, data_type, special_subset=0):
+        if data_type == ONEHOT_AVERAGE:
+            return self.get_one_hot_average_manager().get_torch_iterator(TEST, special_subset)
+        elif data_type == W2V_AVERAGE:
+            return self.get_w2v_average_manager().get_torch_iterator(TEST, special_subset)
+        elif data_type == W2V_SEQUENCE:
+            return self.get_w2v_sequence_manager().get_torch_iterator(TEST, special_subset)
+
+
+def plot_data(results, graph_names, y_axis_name, graph_title):
+    x_values = np.arange(results.shape[1])
+    for i in range(results.shape[0]):
+        plt.plot(x_values, results[i], label=graph_names[i])
+    plt.xlabel('Epoch Number')
+    plt.ylabel(y_axis_name)
+    plt.title(graph_title)
+    plt.legend()
+    plt.show()
+
+
+def plot_losses_and_accuracies_for_data_type(tree_bank_manager, data_type, epoch_n, learning_rate, weight_decay):
+    model = None
+    train_losses = None
+    train_accuracies = None
+    val_losses = None
+    val_accuracies = None
+    loss_graph_title = None
+    accuracy_graph_title = None
+    if data_type == ONEHOT_AVERAGE:
+        model, train_losses, train_accuracies, val_losses, val_accuracies = train_log_linear_with_one_hot(tree_bank_manager, epoch_n, learning_rate, weight_decay)
+        loss_graph_title = "Training and Validation Loss for Log-Linear Model with One-Hot Averages"
+        accuracy_graph_title = "Training and Validation Accuracy for Log-Linear Model with One-Hot Averages"
+    if data_type == W2V_AVERAGE:
+        model, train_losses, train_accuracies, val_losses, val_accuracies = train_log_linear_with_w2v(tree_bank_manager, epoch_n, learning_rate, weight_decay)
+        loss_graph_title = "Training and Validation Loss for Log-Linear Model with Word-to-Vec Embeddings"
+        accuracy_graph_title = "Training and Validation Accuracy for Log-Linear Model with Word-to-Vec Embeddings"
+    if data_type == W2V_SEQUENCE:
+        model, train_losses, train_accuracies, val_losses, val_accuracies = train_lstm_with_w2v(tree_bank_manager, epoch_n, learning_rate, weight_decay)
+        loss_graph_title = "Training and Validation Loss for LSTM Model with Word-to-Vec Embeddings"
+        accuracy_graph_title = "Training and Validation Accuracy for LSTM Model with Word-to-Vec Embeddings"
+    plot_data(np.array([train_losses, val_losses]), ["Training Loss", "Validation Loss"], "Loss", loss_graph_title)
+    plot_data(np.array([train_accuracies, val_accuracies]), ["Training Accuracy", "Validation Accuracy"], "Accuracy", accuracy_graph_title)
+    return model
+
+
+def test_model(tree_bank_manager, model, data_type):
+    criterion = nn.CrossEntropyLoss().to(get_available_device())
+    test_loss, test_accuracy = evaluate(model, tree_bank_manager.get_test_data_iterator(data_type), criterion)
+    _, negated_polarity_accuracy = evaluate(model, tree_bank_manager.get_test_data_iterator(data_type, 1), criterion)
+    _, rare_words_accuracy = evaluate(model, tree_bank_manager.get_test_data_iterator(data_type, 2), criterion)
+    print("Regular test loss: ", test_loss, ", test accuracy: ", test_accuracy, "; for ", data_type)
+    print("Negated polarity accuracy: ", negated_polarity_accuracy, ", rare words accuracy: ", rare_words_accuracy, "; for ", data_type)
+
+
+def train_and_test_model(tree_bank_manager, data_type, epoch_n, learning_rate, weight_decay):
+    model = plot_losses_and_accuracies_for_data_type(tree_bank_manager, data_type, epoch_n, learning_rate, weight_decay)
+    test_model(tree_bank_manager, model, data_type)
 
 
 if __name__ == '__main__':
-    tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
+    tree_bank_managerr = TreeBankManager(64)
+    train_and_test_model(tree_bank_managerr, ONEHOT_AVERAGE, 20, 0.01, 0.001)
+    train_and_test_model(tree_bank_managerr, W2V_AVERAGE, 20, 0.01, 0.001)
+    train_and_test_model(tree_bank_managerr, W2V_SEQUENCE, 4, 0.001, 0.0001)
+    # tree_bank_managerr = TreeBankManager(64)  # Initialise the TreeBankManager with batch_size of 64
     # train_log_linear_with_one_hot(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
     # modell, _, _, _, _ = train_log_linear_with_w2v(tree_bank_managerr, 20, 0.01, 0.001)  # Train a log linear model with the specified hyperparameters
     # print(get_predictions_for_data(modell, tree_bank_managerr.w2v_average_data_manager.get_torch_iterator(TEST)))
-    train_lstm_with_w2v(tree_bank_managerr, 4, 0.001, 0.0001)
+    # train_lstm_with_w2v(tree_bank_managerr, 4, 0.001, 0.0001)
