@@ -352,12 +352,17 @@ class LSTM(nn.Module):
     """
     def __init__(self, embedding_dim, hidden_dim, n_layers, dropout):
         super(LSTM, self).__init__()
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, n_layers, batch_first=True, dropout=dropout, bidirectional=True)  # initialize one LSTM layer
+        self.lstm = nn.LSTM(embedding_dim, hidden_dim, n_layers, batch_first=True, bidirectional=True, dtype=torch.float64)  # initialize one LSTM layer
+        self.dropout = nn.Dropout(dropout)
         self.linear = nn.Linear(2 * hidden_dim, 1, dtype=torch.float64)  # initialize one affine layer
         self.activation = nn.Sigmoid()  # initialize sigmoid activation
+        self.hidden_dim = hidden_dim
 
     def forward(self, x):
-        return self.linear(self.lstm(x))
+        o = self.lstm(x)
+        h = o[1][0]
+        d = self.dropout(h.permute(1, 0, 2).contiguous().view(-1, 2 * self.hidden_dim))
+        return self.linear(d)
 
     def predict(self, x):
         return
@@ -436,8 +441,8 @@ def evaluate(model, data_iterator, criterion):
     with torch.no_grad():  # No gradient for ease of calculation
         for inputs, targets in data_iterator:  # Iterate over the data
             partial_outputs = model(inputs.to(torch.float64))  # Get the positive prediction
-            complementary_outputs = -partial_outputs[:, 0].unsqueeze(1)  # Complementary negative prediction
-            outputs = torch.cat((complementary_outputs, partial_outputs[:, 0].unsqueeze(1)), dim=1)  # Combine
+            complementary_outputs = -partial_outputs  #[:, 0].unsqueeze(1)  # Complementary negative prediction
+            outputs = torch.cat((complementary_outputs, partial_outputs), dim=1)  #[:, 0].unsqueeze(1)), dim=1)  # Combine
             loss = criterion(outputs, targets.to(torch.int64))  # Calculate loss
             _, predicted = torch.max(outputs, 1)  # Count positive predictions
             correct_predictions += torch.eq(predicted, targets).to(torch.int).sum().item()  # Count correct predictions
@@ -547,8 +552,8 @@ class TreeBankManager:
         self.test_set = self.tree_bank.get_test_set()
         self.word_count = self.tree_bank.get_word_counts()
         self.word_list = list(self.word_count.keys())
-        self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
-        self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size, embedding_dim=300)
+        #self.one_hot_average_data_manager = DataManager(data_type=ONEHOT_AVERAGE, batch_size=batch_size)
+        #self.w2v_average_data_manager = DataManager(data_type=W2V_AVERAGE, batch_size=batch_size, embedding_dim=300)
         self.w2v_sequence_data_manager = DataManager(data_type=W2V_SEQUENCE, batch_size=batch_size, embedding_dim=300)
 
 
