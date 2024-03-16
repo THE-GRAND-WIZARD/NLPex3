@@ -182,6 +182,15 @@ def zeroshot_classification(portion=1., labels_index=0):
     return accuracy_score(y_test, predictions)
 
 
+def plot_results(data_portions, accuracy_results):
+    import matplotlib.pyplot as plt
+    plt.plot(data_portions, accuracy_results, marker='o', linestyle='-')
+    plt.xlabel('Portion of Data Used')
+    plt.ylabel('Accuracy')
+    plt.title('Accuracy by Data Portion')
+    plt.grid(True)
+    plt.show()
+
 if __name__ == "__main__":
     portions = [1.]
     # Q1
@@ -197,6 +206,16 @@ if __name__ == "__main__":
     #     print(transformer_classification(portion=p))
 
     # Q3
-    print("\nZero-shot result:")
-    print(zeroshot_classification())
+    # print("\nZero-shot result:")
+    # print(zeroshot_classification())
 
+    # plotting results:
+    #Q1
+    data_portions = [0.1, 0.5, 1.]
+    accuracy_results = [0.273, 0.309, 0.33]
+    plot_results(data_portions, accuracy_results)
+
+    #Q2
+    data_portions = [0.1, 0.5, 1.]
+    accuracy_results = [0.870, 0.903, 0.905]
+    plot_results(data_portions, accuracy_results)
