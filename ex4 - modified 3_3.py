@@ -78,11 +78,21 @@ def transformer_classification(portion=1.):
         def __init__(self, encodings, labels):
             self.encodings = encodings
             self.labels = labels
+            self.items = self.get_items()
+
+        def get_items(self):
+            items = []
+            for i in range(len(self.labels)):
+                item = {key: torch.tensor(val[i]) for key, val in self.encodings.items()}
+                item['labels'] = torch.tensor(self.labels[i])
+                items.append(item)
+            return items
 
         def __getitem__(self, idx):
-            item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
-            item['labels'] = torch.tensor(self.labels[idx])
-            return item
+            # item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+            # item['labels'] = torch.tensor(self.labels[idx])
+            # return item
+            return self.items[idx]
 
         def __len__(self):
             return len(self.labels)
@@ -109,15 +119,15 @@ def transformer_classification(portion=1.):
     # see https://huggingface.co/docs/transformers/v4.25.1/en/quicktour#trainer-a-pytorch-optimized-training-loop
     # Use the DataSet object defined above. No need for a DataCollator
 
-    x_test = x_test[:10]  # TODO: remove later. temporary for testing speed
-    y_test = y_test[:10]  # TODO: remove later. temporary for testing speed
+    # x_test = x_test[:10]  # TODO: remove later. temporary for testing speed
+    # y_test = y_test[:10]  # TODO: remove later. temporary for testing speed
     training_args = TrainingArguments(
         output_dir="results",
         learning_rate=5e-5,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
         num_train_epochs=3,
-
+        logging_strategy="epoch"
     )
     # training data
     tokenized_x_train = tokenize_dataset(tokenizer, x_train)  # tokenizing sentences
@@ -127,10 +137,10 @@ def transformer_classification(portion=1.):
     test_dataset = Dataset(tokenized_x_test, y_test)
 
     trainer = Trainer(
-        model=model.to('cuda'),
+        model=model,
         args=training_args,
-        train_dataset=train_dataset.to('cuda'),
-        eval_dataset=test_dataset.to('cuda'),
+        train_dataset=train_dataset,
+        eval_dataset=test_dataset,
         compute_metrics=compute_metrics
     )
     trainer.train()
@@ -148,7 +158,7 @@ def tokenize_dataset(tokenizer, x_dataset):
 
 
 # Q3
-def zeroshot_classification(portion=1.):
+def zeroshot_classification(portion=1., labels_index=0):
     """
     Perform zero-shot classification
     :param portion: portion of the data to use
@@ -159,15 +169,21 @@ def zeroshot_classification(portion=1.):
     import torch
     x_train, y_train, x_test, y_test = get_data(categories=category_dict.keys(), portion=portion)
     clf = pipeline("zero-shot-classification", model='cross-encoder/nli-MiniLM2-L6-H768')
-    candidate_labels = list(category_dict.values())
-
+    candidate_labels = [list(category_dict.values()), ["funny", "sad", "angry", "bizarre"]]
+    prediction_dicts = []
+    for sentence in x_test:
+        prediction_dicts.append(clf(sentence, candidate_labels[labels_index]))
+        print("Found", len(prediction_dicts), "predictions so far! (", 100 * len(prediction_dicts) / len(x_test), "% done)")
+    prediction_labels = [prediction_dict["labels"] for prediction_dict in prediction_dicts]
+    predictions = [list(category_dict.values()).index(prediction_label[0]) for prediction_label in prediction_labels]
+    # predictions = clf(x_test, candidate_labels[labels_index])
     # Add your code here
     # see https://huggingface.co/docs/transformers/v4.25.1/en/main_classes/pipelines#transformers.ZeroShotClassificationPipeline
-    return
+    return accuracy_score(y_test, predictions)
 
 
 if __name__ == "__main__":
-    portions = [0.001, 0.1, 0.5, 1.]
+    portions = [1.]
     # Q1
     # print("Logistic regression results:")
     # for p in portions:
@@ -175,10 +191,10 @@ if __name__ == "__main__":
     #     print(linear_classification(p))
 
     # Q2
-    print("\nFinetuning results:")
-    for p in portions:
-        print(f"Portion: {p}")
-        print(transformer_classification(portion=p))
+    # print("\nFinetuning results:")
+    # for p in portions:
+    #     print(f"Portion: {p}")
+    #     print(transformer_classification(portion=p))
 
     # Q3
     print("\nZero-shot result:")
